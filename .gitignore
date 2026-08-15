@@ -3,3 +3,10 @@ yolo11m.pt
 yolo11n.pt
 .output
 .yolo-out
+*.pt
+.yolo-out-sds
+.yolo-out-lpd2
+.yolo-out-hc5
+datasets
+wandb
+yolo-kitti

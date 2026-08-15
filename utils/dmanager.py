@@ -21,10 +21,15 @@ class DataManager:
         with open(yaml_path, encoding="utf-8") as data_yaml:
             data = yaml.load(data_yaml, Loader=yaml.FullLoader)
             # Read the data from the yaml file
+            train = data["train"].replace("../", "")
             val = data["val"].replace("../", "")
             # Get the dataset directory name
             dataset_dir = os.path.dirname(yaml_path)
             # Construct the image and annotation paths
+            self.train_image_path = os.path.join(dataset_dir, train)
+            self.train_annotation_path = os.path.join(
+                dataset_dir, train.replace("images", "labels")
+            )
             self.val_image_path = os.path.join(dataset_dir, val)
             self.val_annotation_path = os.path.join(
                 dataset_dir, val.replace("images", "labels")
@@ -148,53 +153,60 @@ class DataManager:
         data_str = json.dumps(data)
         self.__pipeline.persistence.save_file("gen__coco-gt.json", data_str)
 
-    def get_annotation_areas(self) -> list[int]:
-        areas: list[int] = []
+    def get_annotation_areas(self, target_size: int = 640) -> list[float]:
+        areas: list[float] = []
+
         for annotation_file in tqdm(
-            os.listdir(self.val_annotation_path), desc="Processing images"
+            os.listdir(self.train_annotation_path),
+            desc=f"Processing images ({self.train_annotation_path})",
         ):
-            # Remove image extension to get the image name
             img_name = annotation_file.replace(".txt", "")
-            # For each image file in the validation image path
-            for image_file in os.listdir(self.val_image_path):
+
+            for image_file in os.listdir(self.train_image_path):
                 if img_name in image_file:
-                    # Open the annotation file
                     with open(
-                        f"{self.val_annotation_path}/{annotation_file}",
+                        f"{self.train_annotation_path}/{annotation_file}",
                         encoding="utf-8",
                     ) as annotation:
-                        # Open the image file
-                        im = cv2.imread(f"{self.val_image_path}/{image_file}")
-                        # Get image width and height
+                        im = cv2.imread(f"{self.train_image_path}/{image_file}")
+
                         image_height, image_width, _ = im.shape
-                        # For each line in the annotation file
+
+                        # Ultralytics-style aspect-ratio preserving resize
+                        scale = min(
+                            target_size / image_width,
+                            target_size / image_height,
+                        )
+
                         for line in annotation.readlines():
-                            # Parse the annotation
                             (
                                 _,
-                                s_x_center,
-                                s_y_center,
+                                _,
+                                _,
                                 s_annotation_width,
                                 s_annotation_height,
-                            ) = line.split(" ")
-                            # Format values as floats
-                            x_center = float(s_x_center)
-                            y_center = float(s_y_center)
+                            ) = line.split()
+
+                            # YOLO bbox dimensions are normalized
                             annotation_width = float(s_annotation_width)
                             annotation_height = float(s_annotation_height)
-                            # Calculate COCO format bounding box
-                            coco_bbox = self.yolo_to_coco(
-                                x_center,
-                                y_center,
-                                annotation_width,
-                                annotation_height,
-                                image_width,
-                                image_height,
-                            )
-                            # Calculate the area of the annotation
-                            area = self.calculate_annotation_area(coco_bbox)
-                            # Add area to the area list
+
+                            # Convert normalized bbox to original pixel dimensions
+                            bbox_width_px = annotation_width * image_width
+                            bbox_height_px = annotation_height * image_height
+
+                            # Convert to dimensions as seen by the model input
+                            resized_width = bbox_width_px * scale
+                            resized_height = bbox_height_px * scale
+
+                            # Padding does not change bbox width/height,
+                            # so it does not affect area
+                            area = resized_width * resized_height
+
                             areas.append(area)
+
+                    break
+
         return areas
 
     def yolo_to_coco(self, x_center, y_center, w, h, image_w, image_h):
@@ -207,9 +219,9 @@ class DataManager:
 
     FitnessScores: TypeAlias = tuple[float, float, float, float, float]
 
-    def __calculate_fitness_scores(self, area: int) -> FitnessScores:
+    def __calculate_fitness_scores(self, area: float) -> FitnessScores:
 
-        def calculate_score(area: int, mean: float, stdev: float) -> float:
+        def calculate_score(area: float, mean: float, stdev: float) -> float:
             """Calculate the score of an area given a mean + standard deviation
             :param area: The area to calculate the score of
             :param mean: The mean of the normal distribution
@@ -221,11 +233,11 @@ class DataManager:
         :param area: The area to calculate the scores of
         :return: The scores of the area for each head"""
         return (
-            calculate_score(area, 16**2, 100),  # P1
-            calculate_score(area, 32**2, 500),  # P2
-            calculate_score(area, 64**2, 1_000),  # P3
-            calculate_score(area, 96**2, 3_000),  # P4
-            calculate_score(area, 128**2, 3_000),  # P5
+            calculate_score(area, 16**2, 16**2),  # P1
+            calculate_score(area, 32**2, 32**2),  # P2
+            calculate_score(area, 64**2, 64**2),  # P3
+            calculate_score(area, 96**2, 96**2),  # P4
+            calculate_score(area, 128**2, 128**2),  # P5
         )
 
     HeadFitnessScores: TypeAlias = dict[str, float]

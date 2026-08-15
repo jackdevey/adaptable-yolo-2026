@@ -41,7 +41,7 @@ head:
   # P2 is x2 to get to P1
   - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 20
   - [[-1, 0], 1, Concat, [1]] # 21
-  - [-1, 2, C3k2, [128, False]] # 22
+  - [-1, 2, C3k2, [64, False]] # 22
 
   - [[22, 19, 16], 1, Detect, [nc]] # Detect(P1, P2, P3)
 """

@@ -5,7 +5,9 @@ import loguru
 from loguru import logger
 from pydantic import BaseModel, Field
 from ultralytics import YOLO
+from wandb.integration.ultralytics import add_wandb_callback
 
+import wandb
 from utils.adapter import Adapter
 from utils.dmanager import DataManager
 from utils.evaluator import COCOEvaluator
@@ -25,13 +27,18 @@ class Pipeline:
         )
         seed: int = Field(default=0, description="Random seed for training")
 
+    heads: dict[str, float] | None = None
+
     def __init__(
         self,
         dataset_yaml_path: str,
+        project: str,
         config: dict | None = None,
     ) -> None:
         # Parse the configuration dictionary once as a pipeline config object
         self.config = self.Config(**config or {})
+
+        self.project = project
 
         # Initialise persitence
         self.persistence = Persistence(self)
@@ -77,13 +84,15 @@ class Pipeline:
         }
         self.persistence.save_file("model_info.json", json.dumps(model_info, indent=2))
 
-    def create_model(self, skip_and_use: str | None = None):
+    def create_model(
+        self, skip_and_use: str | None = None, abl_branch: str | None = None
+    ):
         # Find a score for each head according to the dataset
         self.heads = self.dmanager.judge_heads()
         # Save the head scores to a file
         self.persistence.save_file("heads.json", str(self.heads))
         # Generate a new model using the adapter
-        model = self.adapter.execute(self.heads, skip_and_use)
+        model = self.adapter.execute(self.heads, skip_and_use, abl_branch)
         # Set the model for the pipeline
         self.set_model(model)
 
@@ -107,11 +116,11 @@ class Pipeline:
             epochs=epochs,
             batch=batch,
             verbose=True,
-            project=".yolo-out",
+            project=self.project,
             name=self.config.name if self.config.name else id,
             device=str(self.config.device) if self.config.device else None,
             seed=seed if seed else 0,
-            save_period=50,
+            save_period=10,
         )
         self.logger.success(
             "Completed ultralytics API training " + f"for {epochs} epochs"
